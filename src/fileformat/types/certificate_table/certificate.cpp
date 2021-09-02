@@ -1,7 +1,7 @@
 /**
  * @file src/fileformat/types/certificate_table/certificate.cpp
  * @brief Class for one certificate.
- * @copyright (c) 2017 Avast Software, licensed under the MIT license
+ * @copyright (c) 2020 Avast Software, licensed under the MIT license
  */
 
 #include <unordered_map>
@@ -107,6 +107,14 @@ const std::string& Certificate::getRawIssuer() const
 	return issuerRaw;
 }
 
+const std::string& Certificate::getOnelineSubject() const
+{
+	return subjectOneline;
+}
+const std::string& Certificate::getOnelineIssuer() const
+{
+	return issuerOneline;
+}
 /**
  * Get subject of certificate in form of attributes
  * @return Subject of certificate

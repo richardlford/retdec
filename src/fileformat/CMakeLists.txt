@@ -34,6 +34,7 @@ add_library(fileformat STATIC
 	types/visual_basic/visual_basic_extern.cpp
 	types/import_table/import.cpp
 	types/import_table/import_table.cpp
+	types/import_table/elf_import_table.cpp
 	types/import_table/pe_import.cpp
 	types/export_table/export.cpp
 	types/export_table/export_table.cpp
@@ -70,6 +71,13 @@ add_library(fileformat STATIC
 	types/tls_info/tls_info.cpp
 	file_format/pe/pe_format.cpp
 	file_format/pe/pe_dll_list.cpp
+	file_format/pe/authenticode/authenticode.cpp
+	file_format/pe/authenticode/pkcs9_counter_signature.cpp
+	file_format/pe/authenticode/ms_counter_signature.cpp
+	file_format/pe/authenticode/pkcs7_signature.cpp
+	file_format/pe/authenticode/x509_certificate.cpp
+	file_format/pe/authenticode/helper.cpp
+	file_format/pe/authenticode/authenticode_structs.cpp
 	file_format/coff/coff_format.cpp
 	file_format/intel_hex/intel_hex_parser/intel_hex_tokenizer.cpp
 	file_format/intel_hex/intel_hex_parser/intel_hex_parser.cpp
@@ -97,6 +105,7 @@ target_link_libraries(fileformat
 		retdec::deps::elfio
 		retdec::deps::llvm
 	PRIVATE
+		retdec::deps::tlsh
 		OpenSSL::Crypto
 )
 

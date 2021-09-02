@@ -6,17 +6,17 @@
 
 #include <algorithm>
 #include <cassert>
+#include <exception>
+#include <iostream>
 #include <map>
+#include <new>
 #include <regex>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 
-#include <openssl/asn1.h>
-#include <openssl/evp.h>
-#include <openssl/pem.h>
-#include <openssl/x509.h>
-
+#include "authenticode/authenticode.h"
+#include "retdec/fileformat/types/certificate_table/certificate_table.h"
 #include "retdec/utils/container.h"
 #include "retdec/utils/conversion.h"
 #include "retdec/utils/scope_exit.h"
@@ -503,296 +503,12 @@ Symbol::UsageType getSymbolUsageType(std::uint8_t storageClass, std::uint8_t com
 	return Symbol::UsageType::UNKNOWN;
 }
 
-/**
- * Calculates the digest using selected hash algorithm.
- * @param peFile PE file with the signature.
- * @param algorithm Algorithm to use.
- * @return Hex string of hash.
- */
-std::string calculateDigest(
-		const retdec::fileformat::PeFormat* peFile,
-		const EVP_MD* algorithm)
-{
-	EVP_MD_CTX* ctx = EVP_MD_CTX_create();
-
-	if (EVP_DigestInit(ctx, algorithm) != 1) // 1 == success
-	{
-		return {};
-	}
-
-	auto digestRanges = peFile->getDigestRanges();
-	for (const auto& range : digestRanges)
-	{
-		const std::uint8_t* data = std::get<0>(range);
-		std::size_t size = std::get<1>(range);
-
-		if (EVP_DigestUpdate(ctx, data, size) != 1) // 1 == success
-		{
-			return {};
-		}
-	}
-
-	std::vector<std::uint8_t> hash(EVP_MD_size(algorithm));
-	if (EVP_DigestFinal(ctx, hash.data(), nullptr) != 1)
-	{
-		return {};
-	}
-
-	EVP_MD_CTX_destroy(ctx);
-
-	std::string ret;
-	retdec::utils::bytesToHexString(hash, ret);
-	return ret;
-}
-
-/**
- * Verifies signature of PE file using PKCS7.
- * @param peFile PE file with the signature.
- * @param p7 PKCS7 structure.
- * @return @c true if signature is valid, otherwise @c false.
- */
-bool verifySignature(const retdec::fileformat::PeFormat* peFile, PKCS7 *p7)
-{
-	// At first, verify that there are data in place where Microsoft Code
-	// Signing should be present
-	if (!p7->d.sign->contents->d.other)
-		return false;
-
-	// We need this because PKCS7_verify() looks up algorithms and without this,
-	// tables are empty
-	OpenSSL_add_all_algorithms();
-	SCOPE_EXIT {
-		EVP_cleanup();
-	};
-
-	// First, check whether the hash written in ContentInfo matches the hash of the whole file
-	auto contentInfoPtr = p7->d.sign->contents->d.other->value.sequence->data;
-	auto contentInfoLen = p7->d.sign->contents->d.other->value.sequence->length;
-	std::vector<std::uint8_t> contentInfoData(contentInfoPtr, contentInfoPtr + contentInfoLen);
-	auto contentInfo = Asn1Item::parse(contentInfoData);
-	if (contentInfo == nullptr)
-		return false;
-	if (!contentInfo->isSequence())
-		return false;
-
-	auto digest = std::static_pointer_cast<Asn1Sequence>(contentInfo)->getElement(1);
-	if (digest == nullptr || !digest->isSequence())
-		return false;
-
-	auto digestSeq = std::static_pointer_cast<Asn1Sequence>(digest);
-	if (digestSeq->getNumberOfElements() != 2)
-		return false;
-
-	auto digestAlgo = digestSeq->getElement(0);
-	auto digestValue = digestSeq->getElement(1);
-	if (!digestAlgo->isSequence() || !digestValue->isOctetString())
-		return false;
-
-	auto digestAlgoSeq = std::static_pointer_cast<Asn1Sequence>(digestAlgo);
-	if (digestAlgoSeq->getNumberOfElements() == 0)
-		return false;
-
-	auto digestAlgoOID = digestAlgoSeq->getElement(0);
-	if (!digestAlgoOID->isObject())
-		return false;
-
-	auto digestAlgoOIDStr = std::static_pointer_cast<Asn1Object>(digestAlgoOID)->getIdentifier();
-
-	const EVP_MD* algorithm = nullptr;
-	if (digestAlgoOIDStr == DigestAlgorithmOID_Sha1)
-		algorithm = EVP_sha1();
-	else if (digestAlgoOIDStr == DigestAlgorithmOID_Sha256)
-		algorithm = EVP_sha256();
-	else if (digestAlgoOIDStr == DigestAlgorithmOID_Md5)
-		algorithm = EVP_md5();
-	else
-	{
-		EVP_cleanup();
-		return false;
-	}
-
-	auto storedHash = std::static_pointer_cast<Asn1OctetString>(digestValue)->getString();
-	auto calculatedHash = calculateDigest(peFile, algorithm);
-	if (storedHash != calculatedHash)
-	{
-		EVP_cleanup();
-		return false;
-	}
-
-	auto contentData = contentInfo->getContentData();
-	auto contentBio = std::unique_ptr<BIO, decltype(&BIO_free)>(
-			BIO_new_mem_buf(contentData.data(), contentData.size()), &BIO_free);
-	auto emptyTrustStore = std::unique_ptr<X509_STORE, decltype(&X509_STORE_free)>(X509_STORE_new(), &X509_STORE_free);
-	if (PKCS7_verify(p7, p7->d.sign->cert, emptyTrustStore.get(), contentBio.get(), nullptr, PKCS7_NOVERIFY) == 0)
-		return false;
-
-	return true;
-}
-
 template <typename T, typename Deleter>
 decltype(auto) managedPtr(T* ptr, Deleter deleter)
 {
 	return std::unique_ptr<T, Deleter>(ptr, deleter);
 }
 
-std::string parseDateTime(ASN1_TIME* dateTime)
-{
-	if (ASN1_TIME_check(dateTime) == 0)
-		return {};
-
-	auto memBio = managedPtr(BIO_new(BIO_s_mem()), &BIO_free);
-	ASN1_TIME_print(memBio.get(), dateTime);
-
-	BUF_MEM* bioMemPtr;
-	BIO_ctrl(memBio.get(), BIO_C_GET_BUF_MEM_PTR, 0, reinterpret_cast<char*>(&bioMemPtr));
-
-	return std::string(bioMemPtr->data, bioMemPtr->length);
-}
-
-std::string parsePublicKey(BIO *bio)
-{
-	std::string key;
-	std::vector<char> tmp(100);
-
-	BIO_gets(bio, tmp.data(), 100);
-	if(std::string(tmp.data()) != "-----BEGIN PUBLIC KEY-----\n")
-	{
-		return key;
-	}
-
-	while(true)
-	{
-		BIO_gets(bio, tmp.data(), 100);
-		if(std::string(tmp.data()) == "-----END PUBLIC KEY-----\n")
-		{
-			break;
-		}
-
-		key += tmp.data();
-		key.erase(key.length() - 1, 1); // Remove last character (whitespace)
-	}
-
-	return key;
-}
-
-void parseAttributes(Certificate::Attributes *attributes, X509_NAME *raw)
-{
-	std::size_t numEntries = X509_NAME_entry_count(raw);
-	for(std::size_t i = 0; i < numEntries; ++i)
-	{
-		auto nameEntry = X509_NAME_get_entry(raw, int(i));
-		auto valueObj = X509_NAME_ENTRY_get_data(nameEntry);
-
-		std::string key = OBJ_nid2sn(
-				OBJ_obj2nid(X509_NAME_ENTRY_get_object(nameEntry))
-		);
-		std::string value = std::string(
-				reinterpret_cast<const char*>(valueObj->data),
-				valueObj->length
-		);
-
-		if (key == "C") attributes->country = value;
-		else if (key == "O") attributes->organization = value;
-		else if (key == "OU") attributes->organizationalUnit = value;
-		else if (key == "dnQualifier") attributes->nameQualifier = value;
-		else if (key == "ST") attributes->state = value;
-		else if (key == "CN") attributes->commonName = value;
-		else if (key == "serialNumber") attributes->serialNumber = value;
-		else if (key == "L") attributes->locality = value;
-		else if (key == "title") attributes->title = value;
-		else if (key == "SN") attributes->surname = value;
-		else if (key == "GN") attributes->givenName = value;
-		else if (key == "initials") attributes->initials = value;
-		else if (key == "pseudonym") attributes->pseudonym = value;
-		else if (key == "generationQualifier") attributes->generationQualifier = value;
-		else if (key == "emailAddress") attributes->emailAddress = value;
-	}
-}
-
-retdec::fileformat::Certificate x509toCert(X509* cert)
-{
-	Certificate c;
-
-	c.validSince = parseDateTime(X509_get_notBefore(cert));
-	c.validUntil = parseDateTime(X509_get_notAfter(cert));
-
-	if (auto pubKey = managedPtr(X509_get_pubkey(cert), &EVP_PKEY_free))
-	{
-		auto memBio = managedPtr(BIO_new(BIO_s_mem()), &BIO_free);
-		PEM_write_bio_PUBKEY(memBio.get(), pubKey.get());
-		c.publicKey = parsePublicKey(memBio.get());
-		c.publicKeyAlgo = OBJ_nid2sn(EVP_PKEY_base_id(pubKey.get()));
-	}
-
-	c.signatureAlgo = OBJ_nid2sn(X509_get_signature_nid(cert));
-
-	if (auto sn = X509_get_serialNumber(cert))
-	{
-		retdec::utils::bytesToHexString(
-				sn->data,
-				sn->length,
-				c.serialNumber,
-				0,
-				0,
-				false
-		);
-	}
-
-	if (auto subjectName = X509_get_subject_name(cert))
-	{
-		auto subjectNameOneline = managedPtr(
-				X509_NAME_oneline(subjectName, nullptr, 0),
-				&free
-		);
-		c.subjectRaw = subjectNameOneline.get();
-
-		parseAttributes(&c.subject, subjectName);
-	}
-
-	if (auto issuerName = X509_get_issuer_name(cert))
-	{
-		auto issuerNameOneline = managedPtr(
-				X509_NAME_oneline(issuerName, nullptr, 0),
-				&free
-		);
-		c.issuerRaw = issuerNameOneline.get();
-
-		parseAttributes(&c.issuer, issuerName);
-	}
-
-	std::vector<char> tmp(0x2000);
-	auto memBio = managedPtr(BIO_new(BIO_s_mem()), &BIO_free);
-
-	i2d_X509_bio(memBio.get(), cert);
-	std::size_t certLen = BIO_read(memBio.get(), tmp.data(), int(tmp.size()));
-	tmp.resize(certLen);
-
-	std::vector<std::uint8_t> sha1Bytes(
-			SHA_DIGEST_LENGTH),
-			sha256Bytes(SHA256_DIGEST_LENGTH
-	);
-	SHA1(reinterpret_cast<const unsigned char*>(
-			tmp.data()),
-			tmp.size(),
-			sha1Bytes.data()
-	);
-	SHA256(reinterpret_cast<const unsigned char*>(
-			tmp.data()),
-			tmp.size(),
-			sha256Bytes.data()
-	);
-
-	retdec::utils::bytesToHexString(sha1Bytes, c.sha1Digest, 0, 0, false);
-	retdec::utils::bytesToHexString(
-			sha256Bytes,
-			c.sha256Digest,
-			0,
-			0,
-			false
-	);
-
-	return c;
-}
 
 } // anonymous namespace
 
@@ -1074,7 +790,6 @@ void PeFormat::loadRichHeader()
 	std::string signature;
 	richHeader = new RichHeader();
 	richHeader->setOffset(offset);
-	richHeader->setSuspicious(header.getNumberOfIterations() > 1);
 	richHeader->setValidStructure(true);
 	if(!header.isHeaderValid())
 	{
@@ -1095,9 +810,16 @@ void PeFormat::loadRichHeader()
 
 		file->readRichHeader(maxOffset, getPeHeaderOffset() - maxOffset, true);
 		richHeader->setOffset(maxOffset);
-		richHeader->setSuspicious(header.getNumberOfIterations() > 1);
-		signature = header.getDecryptedHeaderItemsSignature({0, 1, 2, 3});
+		signature = header.getDecryptedHeaderItemsSignature({ 0, 1, 2, 3 });
 	}
+
+	richHeader->setSuspicious(header.getNumberOfIterations() > 1);
+
+	unsigned long long base_offset;
+	richHeader->getOffset(base_offset);
+	// in case the rich header does have junk data
+	// injected before and doesn't start exactly at offset
+	richHeader->setOffset(base_offset + header.getOffset());
 
 	for(const auto &item : header)
 	{
@@ -1113,7 +835,17 @@ void PeFormat::loadRichHeader()
 
 	richHeader->setKey(header.getKey());
 	richHeader->setSignature(signature);
-	richHeader->setBytes(header.getDecryptedHeaderBytes());
+
+	auto decrypted_bytes = header.getDecryptedHeaderBytes();
+	richHeader->setBytes(decrypted_bytes);
+
+	auto crc32 = retdec::fileformat::getCrc32(decrypted_bytes.data(), decrypted_bytes.size());
+	auto md5 = retdec::fileformat::getMd5(decrypted_bytes.data(), decrypted_bytes.size());
+	auto sha256 = retdec::fileformat::getSha256(decrypted_bytes.data(), decrypted_bytes.size());
+
+	richHeader->setCrc32(crc32);
+	richHeader->setMd5(md5);
+	richHeader->setSha256(sha256);
 }
 
 /**
@@ -1123,11 +855,11 @@ void PeFormat::loadVisualBasicHeader()
 {
 	const auto &allBytes = getBytes();
 	std::vector<std::uint8_t> bytes;
-	unsigned long long version = 0;
-	unsigned long long vbHeaderAddress = 0;
-	unsigned long long vbHeaderOffset = 0;
-	unsigned long long vbProjectInfoOffset = 0;
-	unsigned long long vbComDataRegistrationOffset = 0;
+	std::uint64_t version = 0;
+	std::uint64_t vbHeaderAddress = 0;
+	std::uint64_t vbHeaderOffset = 0;
+	std::uint64_t vbProjectInfoOffset = 0;
+	std::uint64_t vbComDataRegistrationOffset = 0;
 	std::string projLanguageDLL;
 	std::string projBackupLanguageDLL;
 	std::string projExeName;
@@ -1378,8 +1110,8 @@ bool PeFormat::parseVisualBasicComRegistrationInfo(std::size_t structureOffset,
 bool PeFormat::parseVisualBasicProjectInfo(std::size_t structureOffset)
 {
 	std::vector<std::uint8_t> bytes;
-	unsigned long long vbExternTableOffset = 0;
-	unsigned long long vbObjectTableOffset = 0;
+	std::uint64_t vbExternTableOffset = 0;
+	std::uint64_t vbObjectTableOffset = 0;
 	std::string projPath;
 	std::size_t offset = 0;
 	struct VBProjInfo vbpi;
@@ -1432,7 +1164,7 @@ bool PeFormat::parseVisualBasicExternTable(std::size_t structureOffset, std::siz
 	std::vector<std::uint8_t> bytes;
 	struct VBExternTableEntry entry;
 	struct VBExternTableEntryData entryData;
-	unsigned long long vbExternEntryDataOffset = 0;
+	std::uint64_t vbExternEntryDataOffset = 0;
 	std::size_t offset = 0;
 
 	for (std::size_t i = 0; i < nEntries; i++)
@@ -1472,14 +1204,14 @@ bool PeFormat::parseVisualBasicExternTable(std::size_t structureOffset, std::siz
 		entryData.moduleNameAddr = entryDataContent.read<std::uint32_t>(offset); offset += sizeof(entryData.moduleNameAddr);
 		entryData.apiNameAddr = entryDataContent.read<std::uint32_t>(offset); offset += sizeof(entryData.apiNameAddr);
 
-		unsigned long long moduleNameOffset;
+		std::uint64_t moduleNameOffset;
 		if (getOffsetFromAddress(moduleNameOffset, entryData.moduleNameAddr))
 		{
 			moduleName = retdec::utils::readNullTerminatedAscii(allBytes.data(), allBytes.size(),
 														moduleNameOffset, VB_MAX_STRING_LEN, true);
 		}
 
-		unsigned long long apiNameOffset;
+		std::uint64_t apiNameOffset;
 		if (getOffsetFromAddress(apiNameOffset, entryData.apiNameAddr))
 		{
 			apiName = retdec::utils::readNullTerminatedAscii(allBytes.data(), allBytes.size(),
@@ -1510,8 +1242,8 @@ bool PeFormat::parseVisualBasicObjectTable(std::size_t structureOffset)
 	const auto &allBytes = getBytes();
 	std::vector<std::uint8_t> bytes;
 	std::size_t offset = 0;
-	unsigned long long projectNameOffset = 0;
-	unsigned long long objectDescriptorsOffset = 0;
+	std::uint64_t projectNameOffset = 0;
+	std::uint64_t objectDescriptorsOffset = 0;
 	struct VBObjectTable vbot;
 	std::string projName;
 
@@ -1599,7 +1331,7 @@ bool PeFormat::parseVisualBasicObjects(std::size_t structureOffset, std::size_t 
 		vbpod.objectType = structContent.read<std::uint32_t>(offset); offset += sizeof(vbpod.objectType);
 		vbpod.null = structContent.read<std::uint32_t>(offset); offset += sizeof(vbpod.null);
 
-		unsigned long long objectNameOffset;
+		std::uint64_t objectNameOffset;
 		if (!getOffsetFromAddress(objectNameOffset, vbpod.objectNameAddr))
 		{
 			continue;
@@ -1610,7 +1342,7 @@ bool PeFormat::parseVisualBasicObjects(std::size_t structureOffset, std::size_t 
 		object = std::make_unique<VisualBasicObject>();
 		object->setName(objectName);
 
-		unsigned long long methodAddrOffset;
+		std::uint64_t methodAddrOffset;
 		if (getOffsetFromAddress(methodAddrOffset, vbpod.methodNamesAddr))
 		{
 			for (std::size_t mIdx = 0; mIdx < vbpod.nMethods; mIdx++)
@@ -1628,7 +1360,7 @@ bool PeFormat::parseVisualBasicObjects(std::size_t structureOffset, std::size_t 
 					methodNameAddr = byteSwap32(methodNameAddr);
 				}
 
-				unsigned long long methodNameOffset;
+				std::uint64_t methodNameOffset;
 				if (!getOffsetFromAddress(methodNameOffset, methodNameAddr))
 				{
 					continue;
@@ -1884,7 +1616,7 @@ void PeFormat::loadPdbInfo()
  */
 void PeFormat::loadResourceNodes(std::vector<const PeLib::ResourceChild*> &nodes, const std::vector<std::size_t> &levels)
 {
-	unsigned long long rva = 0, size = 0;
+	std::uint64_t rva = 0, size = 0;
 	if(levels.empty() || !getDataDirectoryRelative(PELIB_IMAGE_DIRECTORY_ENTRY_RESOURCE, rva, size))
 	{
 		return;
@@ -1925,7 +1657,8 @@ void PeFormat::loadResourceNodes(std::vector<const PeLib::ResourceChild*> &nodes
 void PeFormat::loadResources()
 {
 	size_t iconGroupIDcounter = 0;
-	unsigned long long rva = 0, size = 0, imageBase = 0;
+	std::uint64_t rva = 0, size = 0;
+	std::uint64_t imageBase = 0;
 	if(!getDataDirectoryRelative(PELIB_IMAGE_DIRECTORY_ENTRY_RESOURCE, rva, size))
 	{
 		return;
@@ -2030,8 +1763,8 @@ void PeFormat::loadResources()
 					resource->setNameId(nameChild->getOffsetToName());
 				}
 
-				unsigned long long dataOffset;
-				getOffsetFromAddress(dataOffset, imageBase + lanLeaf->getOffsetToData());
+				// Check if the offset is actually within the section bounds
+				std::uint64_t dataOffset = getImageLoader().getValidOffsetFromRva(lanLeaf->getOffsetToData());
 				resource->setOffset(dataOffset);
 				resource->setSizeInFile(lanLeaf->getSize());
 				resource->setLanguage(lanChild->getName());
@@ -2066,169 +1799,43 @@ void PeFormat::loadResources()
  */
 void PeFormat::loadCertificates()
 {
-	const auto &securityDir = file->securityDir();
-	if(securityDir.calcNumberOfCertificates() == 0)
+	const SecurityDirectory& securityDir = file->securityDir();
+	if (securityDir.calcNumberOfCertificates() == 0)
 	{
 		return;
 	}
 
-	// We always take the first one, there are no additional certificate tables in PE
-	auto certBytes = securityDir.getCertificate(0);
-	auto certSize = certBytes.size();
-	PKCS7 *p7 = NULL;
-	BIO *bio;
+	// We always take the first one, there might be more WIN_CERT structures tho
+	const std::vector<unsigned char>& certBytes = securityDir.getCertificate(0);
 
-	// Create the BIO object and extract certificate from it
-	if((bio = BIO_new(BIO_s_mem())) != NULL)
+	authenticode::Authenticode authenticode(certBytes);
+
+	this->certificateTable = new CertificateTable(authenticode.getSignatures(this));
+
+	std::uint64_t dirOffset = securityDir.getOffset();
+	std::uint64_t dirSize = securityDir.getSize();
+
+	std::vector<Section*> sections = getSections();
+
+	certificateTable->isOutsideImage = true;
+	// check if the SecurityDir overlaps with any real part of section
+	// if it does, Windows ignores the certificates
+	for (const Section* sec : sections)
 	{
-		if(BIO_reset(bio) == 1)
+		std::uint64_t realSize = sec->getSizeInFile();
+		std::uint64_t realOffset = sec->getOffset();
+		if (!realSize)
 		{
-			if(BIO_write(bio, certBytes.data(), certSize) == certSize)
-			{
-				p7 = d2i_PKCS7_bio(bio, nullptr);
-			}
+			continue;
 		}
-		BIO_free(bio);
-	}
-
-	// Make sure that the PKCS7 structure is valid
-	if(!p7)
-	{
-		return;
-	}
-
-	//// Make sure that the PKCS7 data is valid
-	if(!PKCS7_type_is_signed(p7))
-	{
-		PKCS7_free(p7);
-		return;
-	}
-
-	// Find signer of the application and store its serial number.
-	X509 *signerCert = nullptr;
-	X509 *counterSignerCert = nullptr;
-
-	STACK_OF(X509) *certs = p7->d.sign->cert;
-	STACK_OF(X509) *signers = PKCS7_get0_signers(p7, certs, 0);
-
-	SCOPE_EXIT {
-		if (signers != nullptr)
-			sk_X509_free(signers);
-	};
-
-	if(sk_X509_num(signers) > 0)
-	{
-		signerCert = sk_X509_value(signers, 0);
-	}
-
-	// Try to find countersigner if it exists and store its serial number.
-	STACK_OF(PKCS7_SIGNER_INFO) *sinfos = PKCS7_get_signer_info(p7);
-	if(sk_PKCS7_SIGNER_INFO_num(sinfos) > 0)
-	{
-		PKCS7_SIGNER_INFO *sinfo = sk_PKCS7_SIGNER_INFO_value(sinfos, 0);
-
-		// Counter-signer is stored as unsigned attribute and there is no other way to get it but manual parsing
-		ASN1_TYPE *counterSig = PKCS7_get_attribute(sinfo, NID_pkcs9_countersignature);
-		if(counterSig)
+		std::uint64_t realEndOffset = realOffset + realSize;
+		std::uint64_t dirEndOffset = dirOffset + dirOffset;
+		// if the intervals overlap
+		if (dirOffset < realEndOffset && realOffset < dirEndOffset)
 		{
-			auto bio = std::unique_ptr<BIO, decltype(&BIO_free)>(BIO_new_mem_buf(counterSig->value.sequence->data, counterSig->value.sequence->length), &BIO_free);
-			PKCS7_SIGNER_INFO *counterSinfo = reinterpret_cast<PKCS7_SIGNER_INFO*>(ASN1_item_d2i_bio(ASN1_ITEM_rptr(PKCS7_SIGNER_INFO), bio.get(), nullptr));
-			if(counterSinfo)
-			{
-				// From SignerInfo, we get only issuer, but we can lookup by issuer in all certificates and get original counter-signer
-				counterSignerCert = X509_find_by_issuer_and_serial(certs, counterSinfo->issuer_and_serial->issuer, counterSinfo->issuer_and_serial->serial);
-			}
-			ASN1_item_free(reinterpret_cast<ASN1_VALUE*>(counterSinfo), ASN1_ITEM_rptr(PKCS7_SIGNER_INFO));
+			certificateTable->isOutsideImage = false;
 		}
 	}
-
-	// If we have no signer and countersigner, there must be something really bad
-	if(!signerCert && !counterSignerCert)
-	{
-		return;
-	}
-
-	// Now that we know there is at least a signer or counter-signer, we can
-	// verify the signature. Do not try to verify the signature before
-	// verifying that there is at least a signer or counter-signer as 'p7' is
-	// empty in that case (#87).
-	signatureVerified = verifySignature(this, p7);
-
-	// Create hash table with key-value pair as subject-X509 certificate so we can easily lookup certificates by their subject name
-	std::unordered_map<std::string, X509*> subjectToCert;
-	for(int j = 0; j < sk_X509_num(certs); ++j)
-	{
-		X509 *xcert = sk_X509_value(certs, j);
-		auto subjectPtr = X509_NAME_oneline(X509_get_subject_name(xcert), nullptr, 0);
-		std::string subject = subjectPtr;
-		subjectToCert[subject] = xcert;
-		OPENSSL_free(subjectPtr);
-	}
-
-	// Start with signer certificate which will be always first and continue with its issuer name and use previously constructed hash table to
-	// reconstruct chain of certificates
-	// When we hit the last certificate in the chain and there is counter-signer, try to reconstruct its chain
-	X509* xcert = nullptr;
-	bool counterChain = false;
-	std::string nextIssuer;
-	if(signerCert)
-	{
-		auto nextIssuerPtr = X509_NAME_oneline(X509_get_subject_name(signerCert), nullptr, 0);
-		nextIssuer = nextIssuerPtr;
-		OPENSSL_free(nextIssuerPtr);
-	}
-
-	// Continue while we have next issuer to process, or there is counter-signer certificate and we haven't processed him yet
-	while(!nextIssuer.empty() || (!counterChain && counterSignerCert))
-	{
-		// Find next issuer in the hash table
-		auto itr = subjectToCert.find(nextIssuer);
-		if(itr == subjectToCert.end())
-		{
-			// If we haven't processed counter-signer chain yet and there is counter-signer certificate
-			if(!counterChain && counterSignerCert)
-			{
-				auto nextIssuerPtr = X509_NAME_oneline(X509_get_subject_name(counterSignerCert), nullptr, 0);
-				nextIssuer = nextIssuerPtr;
-				counterChain = true;
-				OPENSSL_free(nextIssuerPtr);
-				continue;
-			}
-			else
-			{
-				break;
-			}
-		}
-		// Remove certificate from the hash table so we can't get into infinite loops
-		else
-		{
-			xcert = itr->second;
-			subjectToCert.erase(itr);
-		}
-
-		if(!certificateTable)
-		{
-			certificateTable = new CertificateTable();
-		}
-
-		Certificate cert = x509toCert(xcert);
-		certificateTable->addCertificate(cert);
-
-		// Check if we are at signer or counter-signer certificate and let the certificate table known indices.
-		if(xcert == signerCert)
-		{
-			certificateTable->setSignerCertificateIndex(certificateTable->getNumberOfCertificates() - 1);
-		}
-		else if(xcert == counterSignerCert)
-		{
-			certificateTable->setCounterSignerCertificateIndex(certificateTable->getNumberOfCertificates() - 1);
-		}
-
-		// Continue with next issuer
-		nextIssuer = cert.getRawIssuer();
-	}
-
-	PKCS7_free(p7);
 }
 
 /**
@@ -2236,7 +1843,7 @@ void PeFormat::loadCertificates()
  */
 void PeFormat::loadTlsInformation()
 {
-	unsigned long long rva = 0, size = 0;
+	std::uint64_t rva = 0, size = 0;
 	if (!getDataDirectoryRelative(PELIB_IMAGE_DIRECTORY_ENTRY_TLS, rva, size) || size == 0)
 	{
 		return;
@@ -2262,17 +1869,27 @@ void PeFormat::loadDotnetHeaders()
 {
 	std::uint64_t metadataHeaderAddress = 0;
 
-	// If our file contains CLR header, then use it
-	unsigned long long comHeaderAddress, comHeaderSize;
-	if(getDataDirectoryRelative(PELIB_IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR, comHeaderAddress, comHeaderSize) && comHeaderSize)
+	// If our file contains CLR header, then use it. Note that .NET framework doesn't
+	// verify the OPTIONAL_HEADER::NumberOfRvaAndSizes, so we must do it the same way.
+	std::uint64_t comHeaderAddress, comHeaderSize;
+	if(getComDirectoryRelative(comHeaderAddress, comHeaderSize) && comHeaderSize)
 	{
 		clrHeader = formatParser->getClrHeader();
 		metadataHeaderAddress = formatParser->getImageBaseAddress() + clrHeader->getMetadataDirectoryAddress();
 	}
-	// If not, then try to guess whether the file could possibly be .NET file based on imports and try to search for metadata header
 	else
 	{
-		if (importTable && importTable->getNumberOfImportsInLibraryCaseInsensitive("mscoree.dll"))
+		return;
+	}
+
+	// If not, then try to guess whether the file could possibly be .NET file based on imports and try to search for metadata header
+	// LZ: Don't. This will lead to the situation when totally unrelated .NET metadata will be read from the binary,
+	// for example from a binary embedded in resources or in overlay.
+	// Sample: 76360c777ac93d7fc7398b5d140c4117eb08501cac30d170f33ab260e1788e74
+	/*
+	else
+	{
+		if (importTable && importTable->getImport("mscoree.dll"))
 		{
 			metadataHeaderAddress = detectPossibleMetadataHeaderAddress();
 			if (metadataHeaderAddress == 0)
@@ -2283,6 +1900,7 @@ void PeFormat::loadDotnetHeaders()
 			return;
 		}
 	}
+	*/
 
 	// This explicit initialization needs to be here, because clang 4.0 has bug in optimizer and it causes problem in valgrind.
 	std::uint64_t signature = 0;
@@ -2334,15 +1952,15 @@ void PeFormat::loadDotnetHeaders()
 			return;
 		}
 
-		if (streamName == "#~" || streamName == "#-")
+		if ((streamName == "#~" || streamName == "#-") && !metadataStream)
 			parseMetadataStream(metadataHeaderAddress, streamOffset, streamSize);
-		else if (streamName == "#Blob")
+		else if (streamName == "#Blob" && !blobStream)
 			parseBlobStream(metadataHeaderAddress, streamOffset, streamSize);
-		else if (streamName == "#GUID")
+		else if (streamName == "#GUID" && !guidStream)
 			parseGuidStream(metadataHeaderAddress, streamOffset, streamSize);
-		else if (streamName == "#Strings")
+		else if (streamName == "#Strings" && !stringStream)
 			parseStringStream(metadataHeaderAddress, streamOffset, streamSize);
-		else if (streamName == "#US")
+		else if (streamName == "#US" && !userStringStream)
 			parseUserStringStream(metadataHeaderAddress, streamOffset, streamSize);
 
 		// Round-up to the nearest higher multiple of 4
@@ -2469,6 +2087,13 @@ void PeFormat::parseMetadataStream(std::uint64_t baseAddress, std::uint64_t offs
 			metadataStream->addMetadataTable(static_cast<MetadataTableType>(i), tableSize);
 			currentAddress += 4;
 		}
+	}
+	// ExtraData flags means there is extra 4 bytes at the end Rows array that contaisn the rows sizes
+	// I don't see anything about in at ECMA-335, but I can see in real samples and in IlSpy source
+	// that understands it and correctly decompiles, sample: 5b5817fe2d4f0989501802b0e2bb4451583ff27fd0723f40bb7f8b0417dd7c58
+	if (heapOffsetSizes & 0x40)
+	{
+		currentAddress += 4;
 	}
 
 	for (std::size_t i = 0; i < 64; ++i)
@@ -2624,55 +2249,11 @@ void PeFormat::parseMetadataStream(std::uint64_t baseAddress, std::uint64_t offs
  */
 void PeFormat::parseBlobStream(std::uint64_t baseAddress, std::uint64_t offset, std::uint64_t size)
 {
-	blobStream = std::make_unique<BlobStream>(offset, size);
+	std::vector<std::uint8_t> data;
 	auto address = baseAddress + offset;
+	getXBytes(address, size, data);
+	blobStream = std::make_unique<BlobStream>(std::move(data), offset, size);
 
-	std::vector<std::uint8_t> elementData;
-	std::uint64_t length, lengthSize;
-
-	std::size_t inStreamOffset = 0;
-	while (inStreamOffset < size)
-	{
-		// First std::uint8_t is length of next element in the blob
-		lengthSize = 1;
-		if (!get1Byte(address + inStreamOffset, length))
-		{
-			return;
-		}
-
-		// 2-std::uint8_t length encoding if the length is 10xxxxxx
-		if ((length & 0xC0) == 0x80)
-		{
-			if (!get2Byte(address + inStreamOffset, length, Endianness::BIG))
-			{
-				return;
-			}
-
-			length &= ~0xC000;
-			lengthSize = 2;
-		}
-		// 4-std::uint8_t length encoding if the length is 110xxxxx
-		else if ((length & 0xE0) == 0xC0)
-		{
-			if (!get4Byte(address + inStreamOffset, length, Endianness::BIG))
-			{
-				return;
-			}
-
-			length &= ~0xE0000000;
-			lengthSize = 4;
-		}
-
-		// Read only if length is greater than 0
-		elementData.clear();
-		if (length > 0 && !getXBytes(address + inStreamOffset + lengthSize, length, elementData))
-		{
-			return;
-		}
-
-		blobStream->addElement(inStreamOffset, elementData);
-		inStreamOffset += lengthSize + length;
-	}
 }
 
 /**
@@ -2709,14 +2290,8 @@ void PeFormat::parseStringStream(std::uint64_t baseAddress, std::uint64_t offset
 	while (currentOffset < size)
 	{
 		std::string string;
-		if (!getNTBS(address + currentOffset, string))
-		{
-			currentOffset += 1;
-			continue;
-		}
-
+		getNTBS(address + currentOffset, string);
 		stringStream->addString(currentOffset, string);
-
 		// +1 for null-terminator
 		currentOffset += 1 + string.length();
 	}
@@ -2854,6 +2429,14 @@ void PeFormat::detectTypeLibId()
 	for (std::size_t i = 1; i <= customAttributeTable->getNumberOfRows(); ++i)
 	{
 		auto customAttributeRow = customAttributeTable->getRow(i);
+
+		// Check that the parent is index into Assembly table
+		MetadataTableType parent_table;
+		if (customAttributeRow->parent.getTable(parent_table) && parent_table != MetadataTableType::Assembly)
+		{
+			continue;
+		}
+
 		if (customAttributeRow->type.getIndex() == guidMemberRef)
 		{
 			// Its value is the TypeLib we are looking for
@@ -3183,14 +2766,9 @@ bool PeFormat::hasMixedEndianForDouble() const
  */
 std::size_t PeFormat::getDeclaredFileLength() const
 {
-	std::size_t declSize = FileFormat::getDeclaredFileLength();
-	if(getNumberOfCoffSymbols() && getCoffSymbolTableOffset())
-	{
-		const std::size_t symTabMaxOffset = getCoffSymbolTableOffset() + (getNumberOfCoffSymbols() * PELIB_IMAGE_SIZEOF_COFF_SYMBOL);
-		declSize = std::max(declSize, symTabMaxOffset);
-	}
-
-	return declSize + getSizeOfStringTable();
+	// LZ: Do not include COFF symbol table in the declared file length;
+	// This is because other PE tools (for example YARA) don't do that either.
+	return FileFormat::getDeclaredFileLength();
 }
 
 bool PeFormat::areSectionsValid() const
@@ -3213,26 +2791,26 @@ bool PeFormat::isExecutable() const
 	return !isDll();
 }
 
-bool PeFormat::getMachineCode(unsigned long long &result) const
+bool PeFormat::getMachineCode(std::uint64_t &result) const
 {
 	result = formatParser->getMachineType();
 	return true;
 }
 
-bool PeFormat::getAbiVersion(unsigned long long &result) const
+bool PeFormat::getAbiVersion(std::uint64_t &result) const
 {
 	// not in PE files
 	static_cast<void>(result);
 	return false;
 }
 
-bool PeFormat::getImageBaseAddress(unsigned long long &imageBase) const
+bool PeFormat::getImageBaseAddress(std::uint64_t &imageBase) const
 {
 	imageBase = formatParser->getImageBaseAddress();
 	return true;
 }
 
-bool PeFormat::getEpAddress(unsigned long long &result) const
+bool PeFormat::getEpAddress(std::uint64_t &result) const
 {
 	std::uint64_t tempResult = 0;
 
@@ -3245,7 +2823,7 @@ bool PeFormat::getEpAddress(unsigned long long &result) const
 	return false;
 }
 
-bool PeFormat::getEpOffset(unsigned long long &epOffset) const
+bool PeFormat::getEpOffset(std::uint64_t &epOffset) const
 {
 	std::uint64_t tempResult = 0;
 
@@ -3598,7 +3176,45 @@ bool PeFormat::initDllList(const std::string & dllListFile)
  */
 bool PeFormat::isDotNet() const
 {
-	return clrHeader != nullptr || metadataHeader != nullptr;
+	if (!clrHeader || !metadataHeader) {
+		return false;
+	}
+
+	std::uint32_t correctHdrSize = 72;
+	if (clrHeader->getHeaderSize() != correctHdrSize)
+	{
+		return false;
+	}
+
+	std::uint32_t numberOfRvaAndSizes = getImageLoader().getOptionalHeader().NumberOfRvaAndSizes;
+	// If the binary is 64bit, check NumberOfRvaAndSizes, otherwise don't
+	if (getImageBitability() == 64)
+	{
+		if (numberOfRvaAndSizes < PELIB_IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR)
+		{
+			return false;
+		}
+	}
+	else if (!isDll())
+	{ // If 32 bit check if first 2 bytes at entry point are 0xFF 0x25
+
+		std::uint64_t entryAddr = 0;
+		if (!getEpAddress(entryAddr))
+		{
+			return false;
+		}
+		std::uint64_t bytes[2];
+		if (!get1Byte(entryAddr, bytes[0]) || !get1Byte(entryAddr + 1, bytes[1]))
+		{
+			return false;
+		}
+		if (bytes[0] != 0xFF || bytes[1] != 0x25)
+		{
+			return false;
+		}
+	}
+
+	return true;
 }
 
 /**
@@ -3623,7 +3239,7 @@ bool PeFormat::isPackedDotNet() const
  *    version was not detected
  * @return @c true if input file original language is Visual Basic, @c false otherwise
  */
-bool PeFormat::isVisualBasic(unsigned long long &version) const
+bool PeFormat::isVisualBasic(std::uint64_t &version) const
 {
 	version = 0;
 	return importTable && std::any_of(visualBasicLibrariesMap.begin(), visualBasicLibrariesMap.end(),
@@ -3645,7 +3261,7 @@ bool PeFormat::isVisualBasic(unsigned long long &version) const
  * @param dllFlags Into this parameter DLL flags will be stored
  * @return @c true if file is DLL and flags are successfully detected, @c false otherwise
  */
-bool PeFormat::getDllFlags(unsigned long long &dllFlags) const
+bool PeFormat::getDllFlags(std::uint64_t &dllFlags) const
 {
 	return formatParser->getDllFlags(dllFlags);
 }
@@ -3657,9 +3273,9 @@ bool PeFormat::getDllFlags(unsigned long long &dllFlags) const
  *
  * If function returns @c false, @a relocs is left unchanged
  */
-bool PeFormat::getNumberOfBaseRelocationBlocks(unsigned long long &relocs) const
+bool PeFormat::getNumberOfBaseRelocationBlocks(std::uint64_t &relocs) const
 {
-	unsigned long long addr, size;
+	std::uint64_t addr, size;
 	if(!getDataDirectoryRelative(PELIB_IMAGE_DIRECTORY_ENTRY_BASERELOC, addr, size) || !addr)
 	{
 		return false;
@@ -3676,16 +3292,16 @@ bool PeFormat::getNumberOfBaseRelocationBlocks(unsigned long long &relocs) const
  *
  * If function returns @c false, @a relocs is left unchanged
  */
-bool PeFormat::getNumberOfRelocations(unsigned long long &relocs) const
+bool PeFormat::getNumberOfRelocations(std::uint64_t &relocs) const
 {
-	unsigned long long blocks = 0;
+	std::uint64_t blocks = 0;
 	if(!getNumberOfBaseRelocationBlocks(blocks))
 	{
 		return false;
 	}
 	relocs = 0;
 
-	for(unsigned long long i = 0; i < blocks; ++i)
+	for(std::uint64_t i = 0; i < blocks; ++i)
 	{
 		relocs += formatParser->getNumberOfRelocationData(i);
 	}
@@ -3702,7 +3318,7 @@ bool PeFormat::getNumberOfRelocations(unsigned long long &relocs) const
  *
  * If method returns @c false, @a relAddr and @a size are left unchanged.
  */
-bool PeFormat::getDataDirectoryRelative(unsigned long long index, unsigned long long &relAddr, unsigned long long &size) const
+bool PeFormat::getDataDirectoryRelative(std::uint64_t index, std::uint64_t &relAddr, std::uint64_t &size) const
 {
 	return formatParser->getDataDirectoryRelative(index, relAddr, size);
 }
@@ -3716,9 +3332,22 @@ bool PeFormat::getDataDirectoryRelative(unsigned long long index, unsigned long 
  *
  * If method returns @c false, @a absAddr and @a size are left unchanged.
  */
-bool PeFormat::getDataDirectoryAbsolute(unsigned long long index, unsigned long long &absAddr, unsigned long long &size) const
+bool PeFormat::getDataDirectoryAbsolute(std::uint64_t index, std::uint64_t &absAddr, std::uint64_t &size) const
 {
 	return formatParser->getDataDirectoryAbsolute(index, absAddr, size);
+}
+
+/**
+* Special for .NET data directory to correctly process data directory on 32-bit binaries
+* @param relAddr Into this parameter is stored relative virtual address of directory
+* @param size Into this parameter is stored size of directory
+* @return @c true if index of selected directory is valid, @c false otherwise
+*
+* If method returns @c false, @a relAddr and @a size are left unchanged.
+*/
+bool PeFormat::getComDirectoryRelative(std::uint64_t &relAddr, std::uint64_t &size) const
+{
+	return formatParser->getComDirectoryRelative(relAddr, size);
 }
 
 /**
@@ -3738,7 +3367,7 @@ const PeCoffSection* PeFormat::getPeSection(const std::string &secName) const
  * @param secIndex Index of section (indexed from 0)
  * @return Pointer to section or @c nullptr if section was not detected
  */
-const PeCoffSection* PeFormat::getPeSection(unsigned long long secIndex) const
+const PeCoffSection* PeFormat::getPeSection(std::uint64_t secIndex) const
 {
 	return dynamic_cast<const PeCoffSection*>(getSection(secIndex));
 }
@@ -3833,20 +3462,19 @@ void PeFormat::scanForAnomalies()
 /**
  * Scan for section anomalies
  */
-void PeFormat::scanForSectionAnomalies(unsigned anamaliesLimit)
+void PeFormat::scanForSectionAnomalies(unsigned anomaliesLimit)
 {
 	std::size_t nSecs = getDeclaredNumberOfSections();
 
-	unsigned long long imageBase;
-	unsigned long long epAddr;
+	std::uint64_t imageBase, epAddr;
 
 	if (getEpAddress(epAddr))
 	{
-		auto *epSec = dynamic_cast<const PeCoffSection*>(getEpSection());
+		auto* epSec = dynamic_cast<const PeCoffSection*>(getSectionFromAddress(epAddr));
 		if (epSec)
 		{
 			// scan EP in last section
-			const PeCoffSection *lastSec = (nSecs) ? getPeSection(nSecs - 1) : nullptr;
+			const PeCoffSection* lastSec = (nSecs) ? getPeSection(nSecs - 1) : nullptr;
 			if (epSec == lastSec)
 			{
 				anomalies.emplace_back(
@@ -3861,6 +3489,13 @@ void PeFormat::scanForSectionAnomalies(unsigned anamaliesLimit)
 					"EpInWritableSection", "Entry point in writable section"
 				);
 			}
+			// if we can't get valid offset then the EP is outside of the physical file
+			std::uint64_t epOffset = 0;
+			if (!getEpOffset(epOffset))
+			{
+				anomalies.emplace_back(
+						"EpInMemoryOnly", "Entry point in memory-only part of a section");
+			}
 		}
 		else
 		{
@@ -3873,7 +3508,7 @@ void PeFormat::scanForSectionAnomalies(unsigned anamaliesLimit)
 	std::set<std::string> secNames;
 	for (std::size_t i = 0; i < nSecs; i++)
 	{
-		if (anomalies.size() > anamaliesLimit)
+		if (anomalies.size() > anomaliesLimit)
 		{
 			break;
 		}
@@ -3958,7 +3593,7 @@ void PeFormat::scanForSectionAnomalies(unsigned anamaliesLimit)
 
 		for (std::size_t j = i + 1; j < nSecs; j++)
 		{
-			if (anomalies.size() > anamaliesLimit)
+			if (anomalies.size() > anomaliesLimit)
 			{
 				break;
 			}
@@ -4020,8 +3655,8 @@ void PeFormat::scanForResourceAnomalies()
 		}
 
 		// scan for resource stretched over multiple sections
-		unsigned long long resAddr;
-		if (getAddressFromOffset(resAddr, res->getOffset()) &&
+		std::uint64_t resAddr;
+		if (res->isValidOffset() && getAddressFromOffset(resAddr, res->getOffset()) &&
 			isObjectStretchedOverSections(resAddr, res->getSizeInFile()))
 		{
 			anomalies.emplace_back("StretchedResource", "Resource " + replaceNonprintableChars(msgName) + " is stretched over multiple sections");
@@ -4037,7 +3672,7 @@ void PeFormat::scanForImportAnomalies()
 	// scan for import stretched over multiple sections
 	for(const auto &impRange : formatParser->getImportDirectoryOccupiedAddresses())
 	{
-		unsigned long long impAddr;
+		std::uint64_t impAddr;
 		if (getAddressFromOffset(impAddr, impRange.getStart()) &&
 			isObjectStretchedOverSections(impAddr, impRange.getSize()))
 		{
@@ -4051,7 +3686,7 @@ void PeFormat::scanForImportAnomalies()
 			{
 				if (imp->hasEmptyName())
 				{
-					unsigned long long ordNum;
+					std::uint64_t ordNum;
 					if (!imp->getOrdinalNumber(ordNum))
 					{
 						msgName = "<unknown>";
@@ -4081,7 +3716,7 @@ void PeFormat::scanForExportAnomalies()
 	// scan for export stretched over multiple sections
 	for(const auto &expRange : formatParser->getExportDirectoryOccupiedAddresses())
 	{
-		unsigned long long expAddr;
+		std::uint64_t expAddr;
 		if (getAddressFromOffset(expAddr, expRange.getStart()) &&
 			isObjectStretchedOverSections(expAddr, expRange.getSize()))
 		{
@@ -4095,7 +3730,7 @@ void PeFormat::scanForExportAnomalies()
 			{
 				if (exp->hasEmptyName())
 				{
-					unsigned long long ordNum;
+					std::uint64_t ordNum;
 					if (!exp->getOrdinalNumber(ordNum))
 					{
 						msgName = "<unknown>";

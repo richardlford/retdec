@@ -101,7 +101,7 @@ void MpressPlugin::prepare()
 void MpressPlugin::unpack()
 {
 	// Find the section which contains the packed content
-	unsigned long long ep;
+	std::uint64_t ep;
 	std::vector<std::uint8_t> packedContentSectAddrBytes;
 
 	_file->getFileFormat()->getEpAddress(ep);
@@ -215,7 +215,7 @@ void MpressPlugin::decodeLzmaProperties(DynamicBuffer& compressedContent, std::u
 
 std::uint32_t MpressPlugin::getFixStub()
 {
-	unsigned long long ep, epOffset;
+	std::uint64_t ep, epOffset;
 	std::vector<std::uint8_t> fixStubOffsetBytes;
 
 	// Fix imports stub is calculated from the EP section where there is offset into it written at specific offset
@@ -319,11 +319,11 @@ void MpressPlugin::fixImportsAndEp(DynamicBuffer& buffer)
 		readPos++; // skip null terminator
 
 		// Set FirstThunk to point into IAT
-		int fileIndex = _peFile->impDir().getFileIndex(moduleName, PeLib::NEWDIR);
+		int fileIndex = _peFile->impDir().getFileIndex(moduleName, true);
 		if (fileIndex == -1)
 			throw InvalidImportHintsException();
 
-		_peFile->impDir().setFirstThunk(fileIndex, PeLib::NEWDIR, destOffset);
+		_peFile->impDir().setFirstThunk(fileIndex, true, destOffset);
 		lowestDestOffset = std::min(destOffset, lowestDestOffset);
 		highestDestOffset = std::max(destOffset, highestDestOffset);
 		destOffset += destOffsetDiff;
@@ -580,7 +580,7 @@ void MpressPlugin::fixRelocations()
 	PeLib::ImageLoader & imageLoader = _peFile->imageLoader();
 
 	// Calculate the offset of EP in EP section
-	unsigned long long epAddress;
+	std::uint64_t epAddress;
 	_file->getFileFormat()->getEpAddress(epAddress);
 	epAddress -= epSegment->getAddress();
 
@@ -605,7 +605,7 @@ void MpressPlugin::fixRelocations()
 
 MpressUnpackerStub MpressPlugin::detectUnpackerStubVersion()
 {
-	unsigned long long ep;
+	std::uint64_t ep;
 	std::vector<std::uint8_t> signatureBytes;
 
 	// Get the data in EP section so we can compare it with signature
@@ -677,15 +677,15 @@ void MpressPlugin::saveFile(const std::string& fileName, DynamicBuffer& content)
 
 	// After this all we need to update the IAT with the contents of ILT
 	// since Import Directory in PeLib is built after the write to the file
-	for (size_t fileIndex = 0; fileIndex < _peFile->impDir().getNumberOfFiles(PeLib::OLDDIR); ++fileIndex)
+	for (size_t fileIndex = 0; fileIndex < _peFile->impDir().getNumberOfFiles(false); ++fileIndex)
 	{
 		auto tmp = static_cast<unsigned int>(fileIndex);
 		auto w = static_cast<unsigned short>(_packedContentSect->getSecSeg()->getIndex());
-		size_t destOffset = _peFile->impDir().getFirstThunk(tmp, PeLib::OLDDIR) - imageLoader.getSectionHeader(w)->VirtualAddress;
-		for (size_t funcIndex = 0; funcIndex < _peFile->impDir().getNumberOfFunctions(tmp, PeLib::OLDDIR); ++funcIndex, destOffset += 4)
+		size_t destOffset = _peFile->impDir().getFirstThunk(tmp, false) - imageLoader.getSectionHeader(w)->VirtualAddress;
+		for (size_t funcIndex = 0; funcIndex < _peFile->impDir().getNumberOfFunctions(tmp, false); ++funcIndex, destOffset += 4)
 		{
 			content.write<std::uint32_t>(
-					_peFile->impDir().getOriginalFirstThunk(tmp, static_cast<unsigned int>(funcIndex), PeLib::OLDDIR),
+					_peFile->impDir().getOriginalFirstThunk(tmp, static_cast<unsigned int>(funcIndex), false),
 					static_cast<uint32_t>(destOffset));
 		}
 	}

@@ -870,7 +870,7 @@ void ElfDetector::getSegments()
 void ElfDetector::getSymbolTable()
 {
 	// specific analysis for ARM architecture
-	unsigned long long machineType;
+	std::uint64_t machineType;
 	const bool isArm = elfParser->getMachineCode(machineType) && machineType == EM_ARM;
 	SpecialInformation specInfo("instruction set", "iset");
 
@@ -1377,7 +1377,7 @@ void ElfDetector::detectFileClass()
 
 void ElfDetector::detectArchitecture()
 {
-	unsigned long long machineType = 0;
+	std::uint64_t machineType = 0;
 	if(!elfParser->getMachineCode(machineType))
 	{
 		return;
@@ -1949,6 +1949,10 @@ void ElfDetector::detectFileType()
 	fileInfo.setFileType(fileType);
 }
 
+void ElfDetector::getTelfhash() {
+	fileInfo.setTelfhash(elfParser->getTelfhash());
+}
+
 void ElfDetector::getAdditionalInfo()
 {
 	getFileVersion();
@@ -1962,6 +1966,7 @@ void ElfDetector::getAdditionalInfo()
 	getSymbolTable();
 	getNotes();
 	getCoreInfo();
+	getTelfhash();
 }
 
 /**

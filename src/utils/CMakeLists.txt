@@ -11,6 +11,7 @@ add_library(utils STATIC
 	file_io.cpp
 	math.cpp
 	memory.cpp
+	ord_lookup.cpp
 	string.cpp
 	system.cpp
 	time.cpp
@@ -52,7 +53,7 @@ elseif(UNIX AND (NOT APPLE) AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 			stdc++fs
 	)
 # Library not found -> hope compiler does not need it.
-else()
+elseif(NOT APPLE)
 	message(STATUS "-- Library stdc++fs NOT found -> linking utils without stdc++fs library")
 endif()
 
