@@ -13,7 +13,7 @@ endif()
 
 set(MSVC_GE $<BOOL:${MSVC}>)
 set(MSVC_CONFIG $<${MSVC_GE}:$<CONFIG>/>)
-
+set(CMAKE_BUILD_TYPE "Debug")
 cond_add_subdirectory(capstone RETDEC_ENABLE_CAPSTONE)
 cond_add_subdirectory(elfio RETDEC_ENABLE_ELFIO)
 cond_add_subdirectory(googletest RETDEC_ENABLE_GOOGLETEST)

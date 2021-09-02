@@ -5,11 +5,12 @@ if(UNIX OR MINGW)
 endif()
 
 # Set the default build type to 'Release'
-if(NOT CMAKE_BUILD_TYPE)
-	set(default_build_type "Release")
+set(CMAKE_BUILD_TYPE "Debug")
+#if(NOT CMAKE_BUILD_TYPE)
+	set(default_build_type "Debug")
 	message(STATUS "Setting build type to '${default_build_type}' as none was specified.")
 	set(CMAKE_BUILD_TYPE "${default_build_type}" CACHE STRING "Choose the type of build." FORCE)
-endif()
+#endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 	set(IS_DEBUG_BUILD "YES")
@@ -46,7 +47,7 @@ ExternalProject_Add(llvm-project
 		-DCMAKE_INSTALL_PREFIX=${LLVM_INSTALL_DIR}
 		# Force a release build (we don't need to debug LLVM).
 		# This has no effect on Windows with MSVC, but is useful on Linux.
-		-DCMAKE_BUILD_TYPE=Release
+		-DCMAKE_BUILD_TYPE=Debug
 		-DCMAKE_CXX_FLAGS_RELEASE=${CMAKE_CXX_FLAGS_RELEASE}
 		-DCMAKE_CXX_FLAGS_DEBUG=${CMAKE_CXX_FLAGS_DEBUG}
 		-DLLVM_USE_CRT_RELEASE=${RT_TYPE_RELEASE}

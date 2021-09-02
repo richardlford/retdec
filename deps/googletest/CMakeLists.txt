@@ -54,7 +54,7 @@ ExternalProject_Add(googletest
 	CMAKE_ARGS
 		-DCMAKE_INSTALL_PREFIX=${GOOGLETEST_INSTALL_DIR}
 		# This does not work on MSVC, but is useful on Linux.
-		-DCMAKE_BUILD_TYPE=Release
+		-DCMAKE_BUILD_TYPE=Debug
 		# Without this, googletest's CMakeLists.txt replaces "/MD" (dynamic run-time) with "-MT" (static runtime).
 		# Default config for most applications is "/MD", so this will cause problems if linked with "-MT" googletest.
 		# https://msdn.microsoft.com/en-us/library/2kzt1wy3.aspx

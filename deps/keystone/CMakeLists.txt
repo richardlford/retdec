@@ -21,7 +21,7 @@ ExternalProject_Add(keystone-project
 	CMAKE_ARGS
 		-DCMAKE_INSTALL_PREFIX=${KEYSTONE_INSTALL_DIR}
 		# This does not work on MSVC, but may be useful on Linux.
-		-DCMAKE_BUILD_TYPE=Release
+		-DCMAKE_BUILD_TYPE=Debug
 		# Force python3 version set in this cmake file.
 		# Python is used to generate LLVMBuild.cmake file. Python2 generates this file
 		# with UNIX paths, which do not work. Python3 generates proper Windows paths.

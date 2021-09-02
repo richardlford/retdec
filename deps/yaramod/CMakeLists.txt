@@ -31,7 +31,7 @@ ExternalProject_Add(yaramod-project
 	CMAKE_ARGS
 		-DCMAKE_INSTALL_PREFIX=${YARAMOD_INSTALL_DIR}
 		# This does not work on MSVC, but may be useful on Linux.
-		-DCMAKE_BUILD_TYPE=Release
+		-DCMAKE_BUILD_TYPE=Debug
 		-DCMAKE_CXX_FLAGS_RELEASE=${CMAKE_CXX_FLAGS_RELEASE}
 		-DCMAKE_CXX_FLAGS_DEBUG=${CMAKE_CXX_FLAGS_DEBUG}
 		# Force the use of the same compiler as used to build the top-level

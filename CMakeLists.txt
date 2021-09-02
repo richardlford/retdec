@@ -23,9 +23,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Set the default build type to 'Release'.
+# Set the default build type to 'Debug'.
 if(NOT CMAKE_BUILD_TYPE)
-	set(default_build_type "Release")
+	set(default_build_type "Debug")
 	message(STATUS "Setting build type to '${default_build_type}' as none was specified.")
 	set(CMAKE_BUILD_TYPE "${default_build_type}" CACHE STRING "Choose the type of build." FORCE)
 endif()
