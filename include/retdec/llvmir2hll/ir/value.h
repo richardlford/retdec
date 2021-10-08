@@ -68,6 +68,8 @@ public:
 
 	std::string getTextRepr();
 
+    void dmp() const;
+
 protected:
 	Value() = default;
 };

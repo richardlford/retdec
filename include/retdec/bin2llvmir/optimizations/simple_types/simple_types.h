@@ -52,6 +52,7 @@ class ValueEntry
 		bool operator==(const ValueEntry& o) const;
 		bool operator<(const ValueEntry& o) const;
 		std::size_t hash() const;
+        void dmp() const;
 		friend std::ostream& operator<<(std::ostream& out, const ValueEntry& ve);
 
 	public:
@@ -73,7 +74,9 @@ class TypeEntry
 		bool operator==(const TypeEntry& o) const;
 		bool operator<(const TypeEntry& o) const;
 		std::size_t hash() const;
-		friend std::ostream& operator<<(std::ostream& out, const TypeEntry& te);
+        void dmp() const;
+
+    friend std::ostream& operator<<(std::ostream& out, const TypeEntry& te);
 
 	public:
 		llvm::Type* type = nullptr;
@@ -96,6 +99,7 @@ class EquationEntry
 		bool operator==(const EquationEntry& o) const;
 		bool operator<(const EquationEntry& o) const;
 		std::size_t hash() const;
+        void dmp() const;
 		friend std::ostream& operator<<(std::ostream& out, const EquationEntry& ee);
 
 		bool isOtherIsPtrToThis();
@@ -141,6 +145,7 @@ class EqSet
 				Config* config,
 				FileImage* objf,
 				std::unordered_set<llvm::Instruction*>& instToErase);
+        void dmp() const;
 
 		friend std::ostream& operator<<(std::ostream& out, const EqSet& eq);
 
@@ -183,7 +188,7 @@ class EqSetContainer
 				Config* config,
 				FileImage* objf,
 				std::unordered_set<llvm::Instruction*>& valsToErase);
-
+        void dmp() const;
 		friend std::ostream& operator<<(std::ostream& out, const EqSetContainer& eqs);
 
 	public:

@@ -562,6 +562,11 @@ SymbolicTree* SymbolicTree::getMaxIntValue()
 	return max;
 }
 
+void SymbolicTree::dmp() const
+{
+    std::cerr << this->print(0) << std::endl;
+}
+
 std::string SymbolicTree::print(unsigned indent) const
 {
 	std::stringstream out;

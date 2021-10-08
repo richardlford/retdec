@@ -9,6 +9,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <iostream>
 
 #include <llvm/ADT/PostOrderIterator.h>
 #include <llvm/IR/CFG.h>
@@ -368,6 +369,11 @@ const Use* ReachingDefinitionsAnalysis::getUse(const Instruction* I) const
 	return getBasicBlockEntry(I).getUse(I);
 }
 
+void ReachingDefinitionsAnalysis::dmp() const
+{
+    std::cerr << *this << std::endl;
+}
+
 std::ostream& operator<<(std::ostream& out, const ReachingDefinitionsAnalysis& rda)
 {
 	for (auto &pair1 : rda.bbMap)
@@ -437,6 +443,11 @@ Changed BasicBlockEntry::initDefsOut()
 
 	changed = oldSz != defsOut.size();
 	return changed;
+}
+
+void BasicBlockEntry::dmp() const
+{
+    std::cerr << *this << std::endl;
 }
 
 std::string BasicBlockEntry::getName() const

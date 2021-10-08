@@ -71,6 +71,7 @@ class JumpTarget
 		retdec::common::Address getFromAddress() const;
 		cs_mode getMode() const;
 		void setMode(cs_mode m) const;
+        void dmp() const;
 
 	friend std::ostream& operator<<(std::ostream &out, const JumpTarget& jt);
 
@@ -104,6 +105,7 @@ class JumpTargets
 		void clear();
 		const JumpTarget& top();
 		void pop();
+        void dmp() const;
 
 		const JumpTarget* push(
 				retdec::common::Address a,

@@ -40,6 +40,7 @@ class RangesToDecode
 		const common::AddressRange* get(common::Address a) const;
 
 		void setArchitectureInstructionAlignment(unsigned a);
+        void dmp() const;
 
 	friend std::ostream& operator<<(std::ostream &os, const RangesToDecode& rs);
 

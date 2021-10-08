@@ -102,6 +102,8 @@ class SymbolicTree
 				const SymbolicTree& s);
 		std::string print(unsigned indent = 0) const;
 
+        void dmp() const;
+
 	// Misc methods.
 	//
 	public:

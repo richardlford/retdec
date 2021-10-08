@@ -4,6 +4,7 @@
 * @copyright (c) 2017 Avast Software, licensed under the MIT license
 */
 
+#include <iostream>
 #include "retdec/llvmir2hll/ir/statement.h"
 #include "retdec/llvmir2hll/ir/value.h"
 #include "retdec/llvmir2hll/support/debug.h"
@@ -40,6 +41,11 @@ ShPtr<Value> Value::getSelf() {
 */
 std::string Value::getTextRepr() {
 	return ValueTextReprVisitor::getTextRepr(shared_from_this());
+}
+
+void Value::dmp() const
+{
+    std::cerr << const_cast<Value*>(this)->getTextRepr() << std::endl;
 }
 
 /**

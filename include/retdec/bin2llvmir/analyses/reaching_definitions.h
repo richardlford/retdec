@@ -85,6 +85,8 @@ class BasicBlockEntry
 	public:
 		BasicBlockEntry(const llvm::BasicBlock* b = nullptr, std::size_t _id = 0);
 
+        void dmp() const;
+
 		std::string getName() const;
 		friend std::ostream& operator<<(
 				std::ostream& out,
@@ -139,6 +141,7 @@ class ReachingDefinitionsAnalysis
 		const Definition* getDef(const llvm::Instruction* I) const;
 		const Use* getUse(const llvm::Instruction* I) const;
 
+        void dmp() const;
 		friend std::ostream& operator<<(
 				std::ostream& out,
 				const ReachingDefinitionsAnalysis& rda);

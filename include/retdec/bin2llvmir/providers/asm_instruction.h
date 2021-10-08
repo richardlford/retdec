@@ -118,6 +118,7 @@ class AsmInstruction
 		bool storesValue(llvm::Value* val) const;
 
 		std::string dump() const;
+        void dmp() const;
 		friend std::ostream& operator<<(
 				std::ostream& out,
 				const AsmInstruction &a);

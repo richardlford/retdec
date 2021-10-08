@@ -9,6 +9,7 @@
 #include <set>
 #include <string>
 #include <vector>
+#include <iostream>
 
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Instruction.h>
@@ -747,6 +748,11 @@ void EqSetContainer::apply(
 	}
 }
 
+void EqSetContainer::dmp() const
+{
+    std::cerr << *this << std::endl;
+}
+
 std::ostream& operator<<(std::ostream& out, const EqSetContainer& eqs)
 {
 	out << std::endl << "equation sets:" << std::endl;
@@ -1269,6 +1275,11 @@ void EqSet::apply(
 	LOG << "\napply END   " << id << " =============================\n";
 }
 
+void EqSet::dmp() const
+{
+    std::cerr << *this << std::endl;
+}
+
 std::ostream& operator<<(std::ostream &out, const EqSet &eq)
 {
 	out << "\t\tTYPE = " << eq.masterType << std::endl;
@@ -1358,6 +1369,11 @@ std::size_t ValueEntry::hash() const
 	return f(value);
 }
 
+void ValueEntry::dmp() const
+{
+    std::cerr << *this << std::endl;
+}
+
 std::ostream& operator<<(std::ostream &out, const ValueEntry &ve)
 {
 	out << ve.value->getName().str() << " : "
@@ -1395,6 +1411,11 @@ std::size_t TypeEntry::hash() const
 {
 	std::hash<Type*> f;
 	return f(type);
+}
+
+void TypeEntry::dmp() const
+{
+    std::cerr << *this << std::endl;
 }
 
 std::ostream& operator<<(std::ostream &out, const TypeEntry &te)
@@ -1451,6 +1472,11 @@ bool EquationEntry::isOtherIsPtrToThis()
 bool EquationEntry::isThisIsPtrToOther()
 {
 	return type == eqType::thisIsPtrToOther;
+}
+
+void EquationEntry::dmp() const
+{
+    std::cerr << *this << std::endl;
 }
 
 std::ostream& operator<<(std::ostream& out, const EquationEntry& ee)

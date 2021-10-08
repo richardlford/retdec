@@ -4,6 +4,7 @@
 * @copyright (c) 2017 Avast Software, licensed under the MIT license
 */
 
+#include <iostream>
 #include "retdec/bin2llvmir/optimizations/decoder/decoder_ranges.h"
 
 using namespace retdec::common;
@@ -195,6 +196,11 @@ const common::AddressRange* RangesToDecode::get(common::Address a) const
 void RangesToDecode::setArchitectureInstructionAlignment(unsigned a)
 {
 	archInsnAlign = a;
+}
+
+void RangesToDecode::dmp() const
+{
+    std::cerr << *this << std::endl;
 }
 
 std::ostream& operator<<(std::ostream &os, const RangesToDecode& rs)

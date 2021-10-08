@@ -4,6 +4,7 @@
 * @copyright (c) 2017 Avast Software, licensed under the MIT license
 */
 
+#include <iostream>
 #include "retdec/bin2llvmir/optimizations/decoder/jump_targets.h"
 #include "retdec/bin2llvmir/providers/asm_instruction.h"
 #include "retdec/bin2llvmir/providers/config.h"
@@ -97,6 +98,11 @@ cs_mode JumpTarget::getMode() const
 void JumpTarget::setMode(cs_mode m) const
 {
 	_mode = m;
+}
+
+void JumpTarget::dmp() const
+{
+    std::cerr << *this << std::endl;
 }
 
 std::ostream& operator<<(std::ostream &out, const JumpTarget& jt)
@@ -253,6 +259,11 @@ auto JumpTargets::begin()
 auto JumpTargets::end()
 {
 	return _data.end();
+}
+
+void JumpTargets::dmp() const
+{
+    std::cerr << *this << std::endl;
 }
 
 std::ostream& operator<<(std::ostream &out, const JumpTargets& jts)

@@ -147,7 +147,9 @@ void ProgramOptions::load()
 			// Maybe we should do some kind of merge.
 			// But it is hard to know what was defined, what was not,
 			// and which value to prefer.
-			config.parameters = backup;
+            // Do not restore. If want to modify parameters, either do it in
+            // the json file, or do it with options after the config.
+			// config.parameters = backup;
 		}
 		++i;
 	}
