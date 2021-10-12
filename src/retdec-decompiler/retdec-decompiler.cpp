@@ -521,6 +521,33 @@ void ProgramOptions::loadOption(std::list<std::string>::iterator& i)
 	{
 		params.setIsVerboseOutput(false);
 	}
+    else if (isParam(i, "", "--llvm"))
+    {
+        // Step over the --llvm.
+        i++;
+
+        // Pass the rest of the line directly to llvm.
+        // First get args as sts.
+        std::vector<std::string> llvm_args;
+        int llvm_argc = 1;
+        const char* const program_arg = this->programName.c_str();
+        llvm_args.push_back(programName);
+        while (i != _argv.end())
+        {
+            llvm_argc++;
+            std::string arg = *i++;
+            llvm_args.push_back(arg);
+        }
+        // Now get as vector of C strings.
+        std::vector<const char*> llvm_argv;
+        for (int i = 0; i < llvm_argc; ++i) {
+            const std::string& arg = llvm_args[i];
+            const char* const llvm_arg = arg.c_str();
+            llvm_argv.push_back(llvm_arg);
+        }
+        bool status = llvm::cl::ParseCommandLineOptions(llvm_argc, &llvm_argv[0], "Retdec llvm options");
+        std::cerr << "LLVM parse result = " << status << std::endl;
+    }
 	// Input file is the only argument that does not have -x or --xyz
 	// before it. But only one input is expected.
 	else if (params.getInputFile().empty())
@@ -665,6 +692,7 @@ Decompilation process arguments:
 LLVM IR debug arguments:
 	[--print-after-all] Dump LLVM IR to stderr after every LLVM pass.
 	[--print-before-all] Dump LLVM IR to stderr before every LLVM pass.
+    [--llvm args] Pass rest of  line to the llvm option parser.
 Other arguments:
 	[-h|--help] Show this help.
 	[--version] Show RetDec version.
