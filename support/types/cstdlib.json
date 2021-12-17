@@ -64,6 +64,18 @@
    ],
    "ret_type": "222"
   },
+  "_Znwm": {
+   "decl": "void * _Znwm(unsigned long size);",
+   "header": "cpp.h",
+   "name": "_Znwm",
+   "params": [
+    {
+     "name": "size",
+     "type": "232"
+    }
+   ],
+   "ret_type": "222"
+  },
   "__absvdi2": {
    "decl": "long __absvdi2(long a);",
    "header": "libgcc/integer.h",

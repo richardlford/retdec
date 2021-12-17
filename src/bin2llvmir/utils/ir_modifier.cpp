@@ -1496,6 +1496,15 @@ llvm::CallInst* IrModifier::modifyCallInst(
 	return _modifyCallInst(call, conv, args);
 }
 
+llvm::CallInst* IrModifier::modifyCallInstCallee(
+        llvm::CallInst* call,
+        llvm::Function* new_callee)
+{
+    // At this point I don't think the arguments have been filled in yet, so such give empty argument list.
+    llvm::ArrayRef<llvm::Value*> args;
+    return _modifyCallInst(call, new_callee, args);
+}
+
 void _eraseUnusedInstructionRecursive(
 		const std::unordered_set<llvm::Value*>& workset)
 {

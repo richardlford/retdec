@@ -76,7 +76,8 @@ def main():
     print('Unpacking archive ...')
     with tarfile.open(arch_path) as tar:
         try:
-            tar.extractall(support_dir)
+            mems = [m for m in tar.getmembers() if m.name.startswith("generic/yara_patterns")]
+            tar.extractall(support_dir, mems)
         except tarfile.ExtractError as ex:
             print('ERROR: failed to unpack the archive', ex)
             cleanup(support_dir)

@@ -337,6 +337,23 @@ class Decoder : public llvm::ModulePass
 		bool _switchGenerated = false;
 
 		bool _somethingDecoded = false;
+
+	// Fixing Procedure Linkage Table (PLT) calls.
+	private:
+		void fixPltCalls();
+
+		// Identify the jumps to library functions.
+		void identifyPltJumps();
+
+		// Modify indirect calls through the plt to direct calls.
+		void makePltCallsDirect();
+
+		// Remove plt jumps.
+		void removePltJumps();
+
+		void identifyPltJumpsForFunction(std::pair<llvm::Function *const, retdec::common::Address> &p);
+
+		std::map<llvm::Function*, llvm::Function*> _plt_function_map;
 };
 
 } // namespace bin2llvmir

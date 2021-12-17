@@ -91,6 +91,11 @@ if(RETDEC_ENABLE_SUPPORT_ORDINALS)
 	)
 endif()
 
+install(
+		DIRECTORY types
+		DESTINATION ${SUPPORT_TARGET_DIR}/generic/
+	)
+  
 # Install yara patterns.
 #
 # Nothing - these are installed by the following Python script.
