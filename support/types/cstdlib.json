@@ -53,7 +53,7 @@
    "ret_type": "222"
   },
   "_Znwj": {
-   "decl": "void * _Znwj(unsigned int size);",
+   "decl": "char * _Znwj(unsigned int size);",
    "header": "cpp.h",
    "name": "_Znwj",
    "params": [
@@ -62,10 +62,10 @@
      "type": "37"
     }
    ],
-   "ret_type": "222"
+   "ret_type": "167"
   },
   "_Znwm": {
-   "decl": "void * _Znwm(unsigned long size);",
+   "decl": "char * _Znwm(unsigned long size);",
    "header": "cpp.h",
    "name": "_Znwm",
    "params": [
@@ -74,7 +74,7 @@
      "type": "232"
     }
    ],
-   "ret_type": "222"
+   "ret_type": "167"
   },
   "__absvdi2": {
    "decl": "long __absvdi2(long a);",
@@ -15726,16 +15726,16 @@
    "ret_type": "84"
   },
   "malloc": {
-   "decl": "void * malloc(size_t size);",
+   "decl": "char * malloc(unsigned long size);",
    "header": "stdlib.h",
    "name": "malloc",
    "params": [
     {
      "name": "size",
-     "type": "112"
+     "type": "232"
     }
    ],
-   "ret_type": "222"
+   "ret_type": "167"
   },
   "matherr": {
    "decl": "int matherr(struct exception * exc);",

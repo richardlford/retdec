@@ -25,7 +25,7 @@ TypeConfig::TypeConfig()
 		{"unsigned short", 16},
 		{"int", 32},
 		{"unsigned int", 32},
-		{"long", 32},
+		{"long", 64},
 		{"unsigned long", 64},
 		{"long long", 64},
 		{"unsigned long long", 64},
